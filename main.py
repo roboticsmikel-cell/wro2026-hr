@@ -3596,6 +3596,9 @@ def state():
         # "browser": it has none (CAMERA_INDEX=off), so the console shows its
         # own camera and uploads frames to /frame.
         'camera': 'server' if CAMERA_ENABLED else 'browser',
+        # False (BAYBAYIN_AUTOPRINT=0, as on Render): this machine prints no
+        # Baybayin, so the console prints it through the browser instead.
+        'server_prints': _AUTOPRINT,
     }
 
 

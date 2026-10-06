@@ -6,6 +6,7 @@ import VoiceRecorder from './Voice'
 import Sing from './Sing'
 import Coin from './Coin'
 import BrowserCamera from './BrowserCamera'
+import { printImage } from './printImage'
 import { markSpeaking, whenQuiet } from './selfVoice'
 
 const initialState = {
@@ -54,6 +55,9 @@ function App({ SingPanel = Sing }) {
   const [reply, setReply] = useState('')
   const [audioSrc, setAudioSrc] = useState(null)
   const [imageSrc, setImageSrc] = useState(null)   // Baybayin image
+  // /state's server_prints, as a ref: applyResult is also called from
+  // callbacks made in earlier renders, which would see a stale state value.
+  const serverPrintsRef = useRef(undefined)
   const [videoSrc, setVideoSrc] = useState(null)   // folk-dance / teaching video
   // Where the clip starts and how long it runs. A visitor watches a clip,
   // not a performance, and the next person should not be waiting through it.
@@ -149,7 +153,16 @@ function App({ SingPanel = Sing }) {
     setTranscript(res.transcript || '')
     setReply(res.reply || '')
     setMode(res.mode || 'chat')
-    setImageSrc(res.image_url ? res.image_url + `?t=${Date.now()}` : null)
+    const freshImage = res.image_url ? res.image_url + `?t=${Date.now()}` : null
+    setImageSrc(freshImage)
+
+    // A backend with no printer of its own (Render) leaves Baybayin to us.
+    // Only an explicit false: an older backend that does not say has its own
+    // printer, and printing here as well would print every word twice.
+    if (res.mode === 'baybayin' && freshImage &&
+        serverPrintsRef.current === false) {
+      printImage(freshImage, res.word ? `Baybayin — ${res.word}` : 'Baybayin')
+    }
 
     // The clip waits for her to finish saying what it is.
     //
@@ -191,6 +204,7 @@ function App({ SingPanel = Sing }) {
 
         if (isMounted) {
           setBackendState(data)
+          serverPrintsRef.current = data.server_prints
 
           // A coin she was ASKED about, read in the background while she was
           // already talking. The sequence number is what distinguishes a new

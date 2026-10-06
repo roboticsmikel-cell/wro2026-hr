@@ -206,6 +206,7 @@ export default function VoiceRecorder({
         mode: data.mode,
         image_url: abs(data.image_url),
         video_url: abs(data.video_url),
+        word: data.word,   // the Baybayin word, for the printed page's title
         command: data.command,
         // Forward these too. The backend answers a spoken or typed "harmonize
         // me in alto" with a sing directive and "identify this coin" with the
