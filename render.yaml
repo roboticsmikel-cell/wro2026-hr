@@ -42,8 +42,14 @@ services:
   - type: web
     name: alzona-web
     runtime: static
-    buildCommand: cd dycinovus && npm ci && npx vite build --config vite.lab.config.js
-    staticPublishPath: ./dycinovus/dist-lab
+    # Build from dycinovus/, not the repo root: at the root Render finds the
+    # backend's requirements.txt and pip-installs it on its default Python
+    # (3.14, no mediapipe 0.10.21) before ever running the build, which failed
+    # the first deploys. Paths below are relative to this folder. As a bonus,
+    # backend-only commits no longer rebuild the site.
+    rootDir: dycinovus
+    buildCommand: npm ci && npx vite build --config vite.lab.config.js
+    staticPublishPath: dist-lab
     envVars:
       # Vite 8 refuses Node older than 20.19 / 22.12; don't rely on Render's
       # default Node version.
