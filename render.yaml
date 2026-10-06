@@ -45,6 +45,10 @@ services:
     buildCommand: cd dycinovus && npm ci && npx vite build --config vite.lab.config.js
     staticPublishPath: ./dycinovus/dist-lab
     envVars:
+      # Vite 8 refuses Node older than 20.19 / 22.12; don't rely on Render's
+      # default Node version.
+      - key: NODE_VERSION
+        value: "22"
       # The backend's public address, e.g. https://alzona-backend.onrender.com
       # (copy it from the alzona-backend page). Read at BUILD time, so after
       # changing it, redeploy alzona-web.
