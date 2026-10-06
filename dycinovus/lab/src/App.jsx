@@ -209,7 +209,7 @@ function App({ SingPanel = Sing }) {
               // the singing panel still knows the sound is hers.
               const form = new FormData()
               form.append('text', say)
-              form.append('voice', 'gemini')   // this console uses the API voice
+              // No 'voice' field: ElevenLabs first, Gemini only if it fails.
               fetch(`${BASE_URL}/say`, { method: 'POST', body: form })
                 .then((r) => r.json())
                 .then((d) => {

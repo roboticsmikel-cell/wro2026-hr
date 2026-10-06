@@ -95,12 +95,19 @@ _gemini_keys = [k for k in (
     os.getenv("GOOGLE_GENAI_API_KEY", "").strip(),
     os.getenv("GOOGLE_GENAI_API_KEY_BACKUP", "").strip(),
 ) if k]
-if not _gemini_keys:
-    raise ValueError("GOOGLE_GENAI_API_KEY not found in .env file!")
+# No key -> FILE-BASED mode: questions are answered straight from the knowledge
+# library (retrieve_knowledge), and everything that needs Gemini — speech
+# transcription, coin reading, the Leda voice — reports itself unavailable
+# instead of stopping the whole backend.
+GEMINI_ENABLED = bool(_gemini_keys)
+if not GEMINI_ENABLED:
+    print("No GOOGLE_GENAI_API_KEY in .env — running FILE-BASED: answers come "
+          "from the knowledge files only; Gemini features are off.")
 
 _gemini_clients = [genai.Client(api_key=k) for k in _gemini_keys]
 _active_idx = 0
-client = _gemini_clients[0]   # currently-active client (used across the app)
+# currently-active client (used across the app); None in file-based mode
+client = _gemini_clients[0] if _gemini_clients else None
 
 
 def _key_blocked_error(msg):
@@ -130,6 +137,9 @@ def gen_content(**kwargs):
     key error with no working alternative) is raised as before."""
     global _active_idx, client
     n = len(_gemini_clients)
+    if not n:
+        # Every caller already catches exceptions and falls back.
+        raise RuntimeError("Gemini is disabled (file-based mode)")
     last_err = None
     for step in range(n):
         idx = (_active_idx + step) % n
@@ -286,7 +296,13 @@ try:
     print("TTS client: using explicit service-account credentials")
 except Exception as _tts_init_err:
     print("TTS explicit-credential init failed, using default:", _tts_init_err)
-    tts_client = texttospeech.TextToSpeechClient()
+    try:
+        tts_client = texttospeech.TextToSpeechClient()
+    except Exception as _tts_default_err:
+        # No credentials anywhere: Cloud TTS is simply off (the startup probe in
+        # _warm_up_tts marks it unavailable) rather than a crash at import.
+        print("Cloud TTS unavailable (no credentials):", str(_tts_default_err)[:100])
+        tts_client = None
 
 # ensure folders for uploads and tts
 os.makedirs("uploads", exist_ok=True)
@@ -477,7 +493,14 @@ ageModel = "age_net.caffemodel"
 MODEL_MEAN_VALUES = (78.4263377603,87.7689143744,114.895847746)
 
 ageList = ['(0-2)','(4-6)','(8-12)','(15-20)','(25-32)','(38-43)','(48-53)','(60-100)']
-ageNet = cv2.dnn.readNetFromCaffe(ageProto,ageModel)
+# Optional: without the two model files every visitor gets the ordinary
+# greeting (no "mano" for elders) instead of the backend refusing to start.
+try:
+    ageNet = cv2.dnn.readNetFromCaffe(ageProto, ageModel)
+except cv2.error:
+    ageNet = None
+    print(f"Age model not found ({ageProto} / {ageModel}) — age check off, "
+          "everyone gets the normal greeting.")
 
 def transcribe_audio(file_path, lang_code=None):
     if lang_code is None:
@@ -1004,7 +1027,11 @@ def face_detection():
 
                     face = frame[y1:y2, x1:x2]
 
-                    if face.size > 0:
+                    if face.size > 0 and ageNet is None:
+                        age_result = "GREET"
+                        age_checked = True
+
+                    elif face.size > 0:
 
                         blob = cv2.dnn.blobFromImage(
                             face,
@@ -1680,6 +1707,8 @@ def wants_festival_dance(text):
 
 def gemini_transcribe(audio_bytes, mime="audio/webm"):
     """Speech-to-text via Gemini (no Cloud Speech / ffmpeg needed)."""
+    if not GEMINI_ENABLED:
+        return ""
     try:
         r = gen_content(
             model="gemini-3-flash-preview",
@@ -1714,6 +1743,8 @@ def gemini_voice(text, cache=False):
     - a quota hit starts a short cooldown instead of a permanent shutoff, so
       the voice recovers on its own once quota frees up."""
     global _tts_cooldown_until
+    if not GEMINI_ENABLED:
+        return None       # file-based mode: next voice in line, or the browser's
     if cache:
         fn = "say_" + hashlib.md5(text.encode("utf-8")).hexdigest() + ".wav"
         if os.path.exists(os.path.join(TTS_OUT, fn)):
@@ -1943,20 +1974,18 @@ def _prerender_fixed_phrases():
     for info in CROATIAN_DANCES.values():
         phrases.append(info["text"])
 
-    # Rendered in BOTH voices. The consoles do not agree on one — 5174 uses
-    # ElevenLabs and the workbench asks for Gemini — and the cache is keyed on
-    # the text AND the file type, so a phrase cached in one voice is still a
-    # cold synthesis in the other. Rendering both means whichever console is
-    # asked, the answer is already waiting.
+    # Rendered in the DEFAULT voice only (ElevenLabs, Gemini if it fails) —
+    # every console now uses that order. Rendering a second Gemini copy of
+    # each phrase as well used up the Gemini quota at every startup, which
+    # left the chat answers themselves hitting 429s.
     done = 0
     for text in phrases:
-        for fast in (False, True):
-            try:
-                if fast_voice(text, True, fast):
-                    done += 1
-            except Exception:
-                pass      # rendered on demand later, as it was before
-    print(f"TTS: {done}/{len(phrases) * 2} fixed phrases ready in both voices")
+        try:
+            if fast_voice(text, True):
+                done += 1
+        except Exception:
+            pass      # rendered on demand later, as it was before
+    print(f"TTS: {done}/{len(phrases)} fixed phrases ready")
 
 
 def _warm_up_tts():
@@ -1979,7 +2008,9 @@ def _warm_up_tts():
     else:
         print("ElevenLabs disabled (USE_ELEVENLABS=0) — using the default Gemini voice.")
     try:
-        if gemini_voice("Hello", cache=True):
+        if not GEMINI_ENABLED:
+            print("Gemini TTS off (file-based mode).")
+        elif gemini_voice("Hello", cache=True):
             print("Gemini TTS ready — primary voice warmed up.")
         else:
             print("Gemini TTS warm-up returned no audio (will retry on demand).")
@@ -2249,6 +2280,9 @@ def _first_sentence(text, max_words=24, sentences=1):
 def identify_coin(jpeg_bytes):
     """Send a camera frame to Gemini vision and return the five coin fields.
     Returns {"ok": False, "error": ...} when no coin is visible."""
+    if not GEMINI_ENABLED:
+        return {"ok": False,
+                "error": "Coin reading needs Gemini, which is turned off right now."}
     try:
         r = gen_content(
             model=CHAT_MODEL,
@@ -2989,6 +3023,47 @@ _NEWCONVO_WORDS = ("new conversation", "new chat", "start over", "start again",
                    "bagong usapan", "リセット", "초기화", "새 대화", "重新开始")
 
 
+_NO_FILE_ANSWER = ("I don't have that in my files yet. Add a document about it "
+                   "and ask me again.")
+
+
+def answer_from_files(question, want_long=False):
+    """FILE-BASED answer, used when Gemini is off: the knowledge-library
+    sentence that shares the most words with the question, plus the sentence
+    after it for a detailed question. Same keyword scoring as
+    retrieve_knowledge, applied per sentence so the reply is the line that
+    actually answers rather than a whole 1200-character chunk read aloud."""
+    terms = [w for w in re.findall(r"[a-z0-9']+", question.lower())
+             if len(w) > 2 and w not in _STOPWORDS]
+    if not terms or not _knowledge_chunks:
+        return _NO_FILE_ANSWER
+    # A sentence must share at least half the question's keywords. One stray
+    # shared word is not an answer: "who won the world cup" matched a sentence
+    # about the World Robot Olympiad on "world" alone.
+    need = (len(terms) + 1) // 2
+    best, best_score = None, 0
+    for chunk in _knowledge_chunks:
+        # Same abbreviation guard as _limit_answer, so "Dr. Yanga" stays whole.
+        protected = chunk["text"]
+        for a in _ABBREV:
+            protected = re.sub(rf"\b{a}\.", a + "\x00", protected)
+        sentences = [s.strip().replace("\x00", ".") for s in
+                     re.split(r"(?<=[.!?])\s+|\n+", protected) if s.strip()]
+        for i, s in enumerate(sentences):
+            low = s.lower()
+            distinct = sum(1 for t in terms if t in low)
+            if distinct < need:
+                continue
+            score = distinct * 3 + sum(low.count(t) for t in terms)
+            if score > best_score:
+                best_score = score
+                best = " ".join(sentences[i:i + (2 if want_long else 1)])
+    if not best:
+        return _NO_FILE_ANSWER
+    return _limit_answer(best, _WORDS_LONG if want_long else _WORDS_SHORT) \
+        or _NO_FILE_ANSWER
+
+
 def detect_memory_reset(text):
     """Return 'new' or 'goodbye' if the message should wipe conversation memory,
     else None. 'new conversation' is checked first so it wins over a trailing
@@ -3150,6 +3225,12 @@ def route_command(transcript, asked_by=""):
         return {"mode": "chat", "reply": "Which word would you like me to write in Baybayin?"}
 
     try:
+        if not GEMINI_ENABLED:
+            reply = answer_from_files(transcript, _wants_long_answer(transcript))
+            conversation_history.append((transcript, reply))
+            del conversation_history[:-MAX_HISTORY_TURNS]
+            return {"mode": "chat", "reply": reply}
+
         context = retrieve_knowledge(transcript)
         # The language this question is in, falling back to the last one she
         # was speaking when it cannot be told — see current_language.
@@ -3340,6 +3421,10 @@ async def listen(file: UploadFile = File(...)):
         data = await file.read()
         if not data:
             return {"kind": "none", "error": "empty audio"}
+        if not GEMINI_ENABLED:
+            # Telling singing from speech needs Gemini; the pitch tracking and
+            # harmony run in the browser and keep working without it.
+            return {"kind": "none"}
         lines = _anthem_lines()
         numbered = "\n".join(f"{i}: {t}" for i, t in enumerate(lines))
         prompt = (
@@ -3545,8 +3630,8 @@ def transcribe_clip(data):
     This transcribes what was actually said, in whatever language it was said,
     which is what lets her answer in it.
     """
-    if not data:
-        return ""
+    if not data or not GEMINI_ENABLED:
+        return ""         # keep the browser's own reading
     try:
         r = gen_content(
             model=CHAT_MODEL,
