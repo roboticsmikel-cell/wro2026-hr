@@ -5,6 +5,7 @@ import WRO26Logo from './assets/WRO26.png'
 import VoiceRecorder from './Voice'
 import Sing from './Sing'
 import Coin from './Coin'
+import BrowserCamera from './BrowserCamera'
 import { markSpeaking, whenQuiet } from './selfVoice'
 
 const initialState = {
@@ -356,12 +357,18 @@ function App({ SingPanel = Sing }) {
             </div>
 
             <div className="relative mt-6 overflow-hidden rounded-2xl h-64 w-full max-w-full lg:h-full md:h-420px border border-white/10 bg-black">
-              {/* Live camera (always mounted so the stream stays warm) */}
-              <img
-                src={`${BASE_URL}/video`}
-                alt="Live camera preview"
-                className="h-full w-full object-contain"
-              />
+              {/* Live camera (always mounted so the stream stays warm). A
+                  backend without a webcam (Render) says camera: "browser",
+                  and this console's own camera stands in for it. */}
+              {backendState.camera === 'browser' ? (
+                <BrowserCamera baseUrl={BASE_URL} />
+              ) : (
+                <img
+                  src={`${BASE_URL}/video`}
+                  alt="Live camera preview"
+                  className="h-full w-full object-contain"
+                />
+              )}
 
               {/* The words being sung, across the camera frame.
                   Behind the Baybayin and the video deliberately: those are

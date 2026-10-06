@@ -923,9 +923,108 @@ DEAD_FRAME_RUN = 150         # about five seconds at thirty frames a second
 REOPEN_COOLDOWN = 20.0       # seconds to wait before trying again
 
 
+# Face presence and age, one frame at a time. Shared by the laptop's own
+# camera loop (face_detection) and by frames a browser uploads to /frame when
+# this backend has no camera (CAMERA_INDEX=off, e.g. on Render), so both
+# greet the same way. The tracking state lives here, not in either caller.
+_face_track = {'present': False, 'no_face_since': None,
+               'seen_since': None, 'age_checked': False}
+# FaceMesh is not thread-safe; uploads that arrive while one is being
+# analysed are skipped rather than queued.
+_face_lock = threading.Lock()
+
+
+def analyse_frame(frame):
+    """Update face_state / age_result from one BGR frame."""
+    global face_state, age_result
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(rgb)
+
+    if results.multi_face_landmarks:
+
+        if not _face_track['present']:
+            print("Face detected")
+    
+        _face_track['present'] = True
+        _face_track['no_face_since'] = None
+
+        face_state = "ALZONA"
+
+        if _face_track['seen_since'] is None:
+            _face_track['seen_since'] = time.time()
+
+        if (
+            not _face_track['age_checked'] and
+            time.time() - _face_track['seen_since'] >= 5
+        ):
+
+            h, w = frame.shape[:2]
+
+            landmarks = results.multi_face_landmarks[0]
+
+            xs = [lm.x * w for lm in landmarks.landmark]
+            ys = [lm.y * h for lm in landmarks.landmark]
+
+            x1 = max(0, int(min(xs)))
+            y1 = max(0, int(min(ys)))
+            x2 = min(w - 1, int(max(xs)))
+            y2 = min(h - 1, int(max(ys)))
+
+            if x2 > x1 and y2 > y1:
+
+                face = frame[y1:y2, x1:x2]
+
+                if face.size > 0 and ageNet is None:
+                    age_result = "GREET"
+                    _face_track['age_checked'] = True
+
+                elif face.size > 0:
+
+                    blob = cv2.dnn.blobFromImage(
+                        face,
+                        1.0,
+                        (227, 227),
+                        MODEL_MEAN_VALUES,
+                        swapRB=False
+                    )
+
+                    ageNet.setInput(blob)
+
+                    agePreds = ageNet.forward()
+
+                    age = ageList[
+                        agePreds[0].argmax()
+                    ]
+
+                    if age in ['(38-43)','(48-53)','(60-100)']:
+                        age_result = "MANO"
+                    else:
+                        age_result = "GREET"
+
+                    print(f"Age: {age} -> {age_result}")
+
+                    _face_track['age_checked'] = True
+
+    else:
+        _face_track['seen_since'] = None
+        _face_track['age_checked'] = False
+        age_result = None
+
+        if _face_track['present']:
+            _face_track['no_face_since'] = time.time()
+
+
+        _face_track['present'] = False
+
+        if _face_track['no_face_since'] and time.time() - _face_track['no_face_since'] > 10:
+            face_state = "goodbye"
+            print("No face detected")
+            _face_track['no_face_since'] = None
+
+
 def face_detection():
 
-    global face_state, running, age_result
     global latest_frame
 
     webcam = open_camera()
@@ -933,12 +1032,6 @@ def face_detection():
     if webcam is None:
         print("ERROR: Could not open any webcam. Check camera connection.")
         return
-
-    present_face = False
-    no_face_start = None
-
-    face_seen_start = None
-    age_checked = False
 
     dead_frames = 0
     last_reopen = 0.0
@@ -996,89 +1089,8 @@ def face_detection():
             print(f"ERROR: Exception during frame encoding: {e}")
             latest_frame = None
 
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb)
-
-        if results.multi_face_landmarks:
-
-            if not present_face:
-                print("Face detected")
-        
-            present_face = True
-            no_face_start = None
-
-            face_state = "ALZONA"
-
-            if face_seen_start is None:
-                face_seen_start = time.time()
-
-            if (
-                not age_checked and
-                time.time() - face_seen_start >= 5
-            ):
-
-                h, w = frame.shape[:2]
-
-                landmarks = results.multi_face_landmarks[0]
-
-                xs = [lm.x * w for lm in landmarks.landmark]
-                ys = [lm.y * h for lm in landmarks.landmark]
-
-                x1 = max(0, int(min(xs)))
-                y1 = max(0, int(min(ys)))
-                x2 = min(w - 1, int(max(xs)))
-                y2 = min(h - 1, int(max(ys)))
-
-                if x2 > x1 and y2 > y1:
-
-                    face = frame[y1:y2, x1:x2]
-
-                    if face.size > 0 and ageNet is None:
-                        age_result = "GREET"
-                        age_checked = True
-
-                    elif face.size > 0:
-
-                        blob = cv2.dnn.blobFromImage(
-                            face,
-                            1.0,
-                            (227, 227),
-                            MODEL_MEAN_VALUES,
-                            swapRB=False
-                        )
-
-                        ageNet.setInput(blob)
-
-                        agePreds = ageNet.forward()
-
-                        age = ageList[
-                            agePreds[0].argmax()
-                        ]
-
-                        if age in ['(38-43)','(48-53)','(60-100)']:
-                            age_result = "MANO"
-                        else:
-                            age_result = "GREET"
-
-                        print(f"Age: {age} -> {age_result}")
-
-                        age_checked = True
-
-        else:
-            face_seen_start = None
-            age_checked = False
-            age_result = None
-
-            if present_face:
-                no_face_start = time.time()
-
-
-            present_face = False
-
-            if no_face_start and time.time() - no_face_start > 10:
-                face_state = "goodbye"
-                print("No face detected")
-                no_face_start = None
+        with _face_lock:
+            analyse_frame(frame)
 
         # Keep the latest frame for the frontend; do not open a local display.
         # The camera feed is served only through the /video endpoint.
@@ -3580,14 +3592,52 @@ def state():
         # Rises by one each time a coin is read, so the console can tell a new
         # answer from the one it already showed.
         'coin': last_coin_result,
+        # "server": this backend has the webcam and streams it on /video.
+        # "browser": it has none (CAMERA_INDEX=off), so the console shows its
+        # own camera and uploads frames to /frame.
+        'camera': 'server' if CAMERA_ENABLED else 'browser',
     }
+
+
+_MAX_FRAME_BYTES = 2_000_000    # a 640x480 JPEG is ~50 KB; this is generous
+
+
+@app.post('/frame')
+async def upload_frame(file: UploadFile = File(...)):
+    """A camera frame from the console's browser, for a backend with no webcam.
+
+    Does what the laptop's camera loop does for each frame it reads: keeps it
+    as latest_frame (which coin identification reads) and runs face presence
+    and age on it (face_state / age_result, which drive the greeting).
+    """
+    global latest_frame
+    if CAMERA_ENABLED:
+        # This machine has its own camera; a second source would fight it.
+        return JSONResponse({"ok": False, "error": "this backend uses its own camera"},
+                            status_code=409)
+    data = await file.read()
+    if not data or len(data) > _MAX_FRAME_BYTES:
+        return JSONResponse({"ok": False, "error": "empty or oversized frame"},
+                            status_code=400)
+    frame = cv2.imdecode(np.frombuffer(data, np.uint8), cv2.IMREAD_COLOR)
+    if frame is None:
+        return JSONResponse({"ok": False, "error": "not an image"}, status_code=400)
+    latest_frame = data
+    # Busy analysing the previous upload: keep this one for coins, skip faces.
+    if not _face_lock.acquire(blocking=False):
+        return {"ok": True, "analysed": False}
+    try:
+        await run_in_threadpool(analyse_frame, frame)
+    finally:
+        _face_lock.release()
+    return {"ok": True, "analysed": True}
 
 
 @app.get('/video')
 def video_feed():
     """Return an MJPEG stream of the latest camera frames."""
     if not CAMERA_ENABLED:
-        return Response(status_code=204)   # no camera on this machine
+        return Response(status_code=204)   # no camera here; see /frame
 
     def generate():
         global latest_frame
