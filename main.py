@@ -328,6 +328,12 @@ face_mesh = mp_face_mesh.FaceMesh(
 # latest camera frame (JPEG bytes) for web UI
 latest_frame = None
 
+# CAMERA_INDEX=off (or none / -1) runs with no camera at all: a cloud server
+# such as Render has none, so the face thread is never started and /video
+# answers at once instead of holding the connection open with nothing to send.
+CAMERA_ENABLED = os.environ.get("CAMERA_INDEX", "0").strip().lower() not in (
+    "off", "none", "-1")
+
 # BAYBAYIN PNGx
 baybayin_path = {
     # --- Independent Vowels (Mga Patinig) ---
@@ -2197,7 +2203,13 @@ _FAKE_SPOKEN = "That one's a fake."
 # exist yet. The thread died on a NameError at every single startup, so the
 # phrases it promises to have ready were never rendered and every one of them
 # was synthesised on demand.
-threading.Thread(target=_prerender_fixed_phrases, daemon=True).start()
+#
+# PRERENDER_PHRASES=0 skips it. A cloud host with a throwaway disk (Render's
+# free tier wipes it on every restart and every wake from sleep) would pay
+# for all of these again each time; there they are rendered on first use.
+if os.environ.get("PRERENDER_PHRASES", "1").strip().lower() not in (
+        "0", "false", "no", "off"):
+    threading.Thread(target=_prerender_fixed_phrases, daemon=True).start()
 
 
 _COIN_PROMPT = """You are identifying a coin held up to a camera.
@@ -3574,6 +3586,8 @@ def state():
 @app.get('/video')
 def video_feed():
     """Return an MJPEG stream of the latest camera frames."""
+    if not CAMERA_ENABLED:
+        return Response(status_code=204)   # no camera on this machine
 
     def generate():
         global latest_frame
@@ -3895,17 +3909,22 @@ def detect_command(text):
 # =========================================================
 if __name__ == "__main__":
     # Start background threads for face detection and chatbot
-    t1 = threading.Thread(target=face_detection, daemon=True)
-    t1.start()
-    print("✓ Face detection thread started")
+    if CAMERA_ENABLED:
+        t1 = threading.Thread(target=face_detection, daemon=True)
+        t1.start()
+        print("✓ Face detection thread started")
+    else:
+        print("Camera off (CAMERA_INDEX=off) — no face detection.")
 
     # t2 = threading.Thread(target=chatbot, daemon=True)
     # t2.start()
     # print("✓ Chatbot thread started")
 
     # Run FastAPI server
-    print("✓ Starting FastAPI on 0.0.0.0:5002")
-    uvicorn.run(app, host="0.0.0.0", port=5002)
+    # Hosts such as Render choose the port and pass it in PORT.
+    port = int(os.environ.get("PORT", "5002"))
+    print(f"✓ Starting FastAPI on 0.0.0.0:{port}")
+    uvicorn.run(app, host="0.0.0.0", port=port)
 
 
 

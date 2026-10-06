@@ -1,0 +1,30 @@
+# Keep the backend image small and free of secrets.
+.git
+.env
+.env.*
+!.env.example
+dyciroboticsteam-*.json
+*-service-account*.json
+*.json.key
+
+gsp-env/
+venv/
+.venv/
+__pycache__/
+*.py[cod]
+
+# The website is built and hosted separately (render.yaml: alzona-web).
+dycinovus/
+node_modules/
+
+# Generated at runtime.
+static/tts/
+static/baybayin/
+uploads/
+
+*.mp4
+*.avi
+*.mov
+*.log
+.claude/
+.vscode/

@@ -1,0 +1,52 @@
+# Render Blueprint: Render dashboard -> New -> Blueprint -> pick this repo.
+#
+# Two services:
+#   alzona-backend  main.py in Docker (see Dockerfile) - chat, voice, knowledge
+#   alzona-web      the 5175 workbench console, built as a static site
+#
+# Values marked `sync: false` are secrets or are only known after the first
+# deploy; Render asks for them when the Blueprint is created. Never put the
+# real keys in this file - it is committed.
+services:
+  - type: web
+    name: alzona-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    # Free sleeps after 15 minutes idle (about a minute to wake) and has
+    # 512 MB of memory. If the logs show it running out of memory, switch
+    # this service to the Starter plan in the dashboard.
+    plan: free
+    healthCheckPath: /
+    envVars:
+      - key: GOOGLE_GENAI_API_KEY
+        sync: false
+      - key: GOOGLE_GENAI_API_KEY_BACKUP
+        sync: false
+      - key: USE_ELEVENLABS
+        value: "1"
+      - key: ELEVENLABS_API_KEY
+        sync: false
+      - key: ELEVENLABS_VOICE_ID
+        sync: false
+      - key: ELEVENLABS_MODEL
+        value: eleven_turbo_v2_5
+      - key: CAMERA_INDEX
+        value: "off"
+      - key: BAYBAYIN_AUTOPRINT
+        value: "0"
+      # The free tier's disk is wiped on every restart and wake, so recording
+      # all fixed phrases at startup would spend ElevenLabs credits each time.
+      - key: PRERENDER_PHRASES
+        value: "0"
+
+  - type: web
+    name: alzona-web
+    runtime: static
+    buildCommand: cd dycinovus && npm ci && npx vite build --config vite.lab.config.js
+    staticPublishPath: ./dycinovus/dist-lab
+    envVars:
+      # The backend's public address, e.g. https://alzona-backend.onrender.com
+      # (copy it from the alzona-backend page). Read at BUILD time, so after
+      # changing it, redeploy alzona-web.
+      - key: VITE_BACKEND_URL
+        sync: false

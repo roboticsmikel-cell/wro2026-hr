@@ -44,7 +44,10 @@ function App({ SingPanel = Sing }) {
   // Whatever host served this page is the host running the backend. Hardcoding
   // localhost worked only on this machine: opened from a phone, "localhost"
   // means the PHONE, so every request died and the site looked broken.
-  const BASE_URL = `http://${window.location.hostname}:5002`
+  // A hosted build (Render) sets VITE_BACKEND_URL, because there the backend
+  // is a different site, not this host on port 5002.
+  const BASE_URL = (import.meta.env.VITE_BACKEND_URL || '').replace(/\/+$/, '')
+    || `http://${window.location.hostname}:5002`
   const [backendState, setBackendState] = useState(initialState)
   const [transcript, setTranscript] = useState('')
   const [reply, setReply] = useState('')
